@@ -26,7 +26,7 @@ void setup() {
     sine_table[n] = (int32_t)(sin(2.0 * PI * n / TABLE_SIZE) * 2147483647.0);
   }
 
-  // 2. Configure I2S interface (slave mode, receives clock from receiver)
+  // 2. Configure I2S interface (slave mode, receives clock from receiver node)
   i2s_config_t i2s_config = {
     .mode = (i2s_mode_t)(I2S_MODE_SLAVE | I2S_MODE_TX),
     .sample_rate = 44100,

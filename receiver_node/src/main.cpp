@@ -5,6 +5,10 @@
 
 #include "AudioTools.h"
 
+// BCLK: 14
+// LRCLK: 15
+// DIN: 32
+
 // Audio configuration: 44.1kHz, stereo, 32-bit
 AudioInfo info(44100, 2, 32);
 I2SStream i2sStream; // I2S input stream
@@ -48,7 +52,7 @@ void setup(void) {
 
     // Wait for I2S data — we're waiting for the damn sender to wake up
     while (true) {
-        if (i2sStream.isActive() && i2sStream.available() > 100) { // Require >100 samples for confidence
+        if (i2sStream.isActive()) { // Require >100 samples for confidence
             Serial.println("I2S sender detected — YES, WE HAVE LIFTOFF!");
 
             AudioInfo receivedInfo = i2sStream.audioInfo();
