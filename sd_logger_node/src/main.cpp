@@ -20,8 +20,7 @@
 
 // audio information config
 // 44.1 kHz, stereo, 32-bit — must match the sender node.
-// CHANGED TO 8khz for testing purposes (BROWNOUT)
-AudioInfo StreamInfo(8000, 2, 32);
+AudioInfo StreamInfo(44100, 2, 32);
 
 // input to stream copy function
 // this represents the signal coming from microphone
@@ -134,7 +133,7 @@ void setup() {
         sdReady = wav_writer_begin(StreamInfo, "/recording.wav");
     }
     if (sdReady) {
-        record_wav_clip(15000);  // 15 seconds
+        record_wav_clip(5000);  // 5 seconds
         recordingDone = true;
     } else {
         Serial.println("[MAIN] SD unavailable — skipping WAV recording.");

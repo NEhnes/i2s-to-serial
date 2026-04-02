@@ -48,6 +48,9 @@ EncodedAudioStream &wav_writer_stream() {
 
 void wav_writer_end() {
     if (wavFile) {
+        // Let the WAV encoder finalize — this updates the RIFF/data
+        // chunk sizes in the header so the file reports correct duration.
+        encodedStream.end();
         wavFile.flush();
         wavFile.close();
         Serial.println("[WAV] Recording stopped — file closed.");
