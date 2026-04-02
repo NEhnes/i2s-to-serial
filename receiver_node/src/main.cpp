@@ -6,7 +6,7 @@
 #include "AudioTools.h"
 
 // BCLK: 14
-// LRCLK: 15
+// LRCLK: 15 // AKA Word Select (LRCLK)
 // DIN: 32
 
 // Audio configuration: 44.1kHz, stereo, 32-bit
