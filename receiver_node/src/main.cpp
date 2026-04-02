@@ -23,7 +23,7 @@ void setup(void) {
 
     delayMicroseconds(2000000);  // 2 second delay — give sender time to boot
 
-    Serial.begin(115200);
+    Serial.begin(921600);
     Serial.println("Serial communication initialized");
 
     delayMicroseconds(2000000);  // Another 2-second delay — patience is non-negotiable

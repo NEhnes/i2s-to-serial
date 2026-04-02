@@ -20,26 +20,30 @@
 
 // audio information config
 // 44.1 kHz, stereo, 32-bit — must match the sender node.
-AudioInfo StreamInfo(44100, 2, 32);
-
-// csv output object
-CsvOutput<int32_t> csvOutput(Serial);
-
-// this is the key component that handles stream routing.
-StreamCopy copier(multiOutput, i2sStream);
+// CHANGED TO 8khz for testing purposes (BROWNOUT)
+AudioInfo StreamInfo(8000, 2, 32);
 
 // input to stream copy function
 // this represents the signal coming from microphone
 I2SStream i2sStream;
 
+// csv output object
+CsvOutput<int32_t> csvOutput(Serial);
+
 // output of stream copy function
 // this will fan out to both Serial CSV and WAV file
 MultiOutput multiOutput;
 
-// Track whether SD + WAV init succeeded so loop() can gracefully degrade
-bool sdReady = false;
+// this is the key component that handles stream routing.
+// NOTE: must be declared AFTER i2sStream and multiOutput
+StreamCopy copier(multiOutput, i2sStream);
 
-void printDebugInfo() {
+// Track whether recording is finished
+bool recordingDone = false;
+
+// Debug helper — call AFTER cfg is created in setup()
+template <typename Cfg>
+void printDebugInfo(const Cfg &cfg) {
     Serial.println("Debug Info:");
     // stream data
     Serial.print("StreamInfo - Sample Rate: "); Serial.print(StreamInfo.sample_rate);
@@ -52,11 +56,38 @@ void printDebugInfo() {
     Serial.println();
 }
 
+// ---------------------------------------------------------------------------
+//  Record a fixed-length WAV clip to the SD card.
+//  Blocks for `durationMs` milliseconds, copying I2S data into the WAV file.
+//  After the duration elapses, the file is finalized and closed.
+// ---------------------------------------------------------------------------
+void record_wav_clip(unsigned long durationMs) {
+    // Build a temporary pipeline: I2S → WAV file only (no CSV spam)
+    MultiOutput wavOnly;
+    wavOnly.add(wav_writer_stream());
+    StreamCopy wavCopier(wavOnly, i2sStream);
+
+    Serial.printf("[REC] Recording %lu seconds to SD card...\n", durationMs / 1000);
+
+    unsigned long startTime = millis();
+
+    while ((millis() - startTime) < durationMs) {
+        wavCopier.copy();
+    }
+
+    // Finalize — flushes buffer and writes correct WAV header size
+    wav_writer_end();
+
+    Serial.println("[REC] =============================");
+    Serial.println("[REC] file saved");
+    Serial.println("[REC] =============================");
+}
+
 void setup() {
 
     delayMicroseconds(2000000);  // 2s delay — give sender time to boot
 
-    Serial.begin(115200);
+    Serial.begin(921600);
     Serial.println("Serial communication initialized");
 
     AudioToolsLogger.begin(Serial, AudioToolsLogLevel::Info);
@@ -71,6 +102,8 @@ void setup() {
     cfg.pin_mck    = 3;
     // pass cfg object to i2sStream begin() call
     i2sStream.begin(cfg);
+
+    printDebugInfo(cfg);
 
     // CSV output
     csvOutput.begin(StreamInfo);
@@ -95,23 +128,21 @@ void setup() {
         delayMicroseconds(500000);
     }
 
-    // ---- SD card + WAV init ----
-    sdReady = sd_card_init();
+    // ---- SD card + WAV recording (15-second clip) ----
+    bool sdReady = sd_card_init();
     if (sdReady) {
         sdReady = wav_writer_begin(StreamInfo, "/recording.wav");
     }
-
-    // ---- Build the output pipeline ----
     if (sdReady) {
-        // SD succeeded — route to both Serial CSV and WAV file
-        multiOutput.add(csvOutput);
-        multiOutput.add(wav_writer_stream());
-        Serial.println("[MAIN] Output: Serial CSV + WAV file");
+        record_wav_clip(15000);  // 15 seconds
+        recordingDone = true;
     } else {
-        // SD failed — default to Serial-only
-        multiOutput.add(csvOutput);
-        Serial.println("[MAIN] Output: Serial CSV only (SD unavailable)");
+        Serial.println("[MAIN] SD unavailable — skipping WAV recording.");
     }
+
+    // ---- After recording, set up CSV-only output for loop() ----
+    multiOutput.add(csvOutput);
+    Serial.println("[MAIN] Entering CSV streaming mode.");
 }
 
 void loop() {

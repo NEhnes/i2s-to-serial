@@ -12,7 +12,9 @@ bool sd_card_init() {
     // Mount the SD card on the CS pin
     // SD.begin() returns false if the card is missing, not formatted, or
     // if the SPI wiring is wrong.
-    if (!SD.begin(SD_CS_PIN)) {
+    // Use a lower SPI frequency (1 MHz) to reduce sensitivity to
+    // I2S DMA interrupts preempting mid-SPI-transfer.
+    if (!SD.begin(SD_CS_PIN, SPI, 1000000)) {
         Serial.println("[SD] ERROR: SD card mount failed!");
         Serial.println("[SD]   - Is a FAT32-formatted card inserted?");
         Serial.println("[SD]   - Check SPI wiring (CS, MOSI, MISO, SCK).");
