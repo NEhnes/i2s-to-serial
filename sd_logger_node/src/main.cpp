@@ -19,8 +19,9 @@
 #include "wav_writer.h"
 
 // audio information config
-// 44.1 kHz, stereo, 32-bit — must match the sender node.
-AudioInfo StreamInfo(44100, 2, 32);
+// WHY THE FUCK DOES THIS CHANGE WAV LNEGTH?
+// 16000 Hz, stereo, 32-bit — must match the sender node.
+AudioInfo StreamInfo(16000, 2, 32);
 
 // input to stream copy function
 // this represents the signal coming from microphone
@@ -70,9 +71,18 @@ void record_wav_clip(unsigned long durationMs) {
 
     unsigned long startTime = millis();
 
+    digitalWrite(LED_BUILTIN, HIGH);  // turn on LED to indicate recording status
+
     while ((millis() - startTime) < durationMs) {
+
+        if (i2sStream.available() == 0) {
+            Serial.println("BUFFER UNDERRUN");    // added to diagnose shortened WAV file issue
+        }
+
         wavCopier.copy();
     }
+
+    digitalWrite(LED_BUILTIN, LOW);   // turn off LED to indicate recording is done
 
     // Finalize — flushes buffer and writes correct WAV header size
     wav_writer_end();
@@ -82,9 +92,28 @@ void record_wav_clip(unsigned long durationMs) {
     Serial.println("[REC] =============================");
 }
 
+// ---------------------------------------------------------------------------
+// Helper function to generate a unique WAV filename for each recording.
+// Checks for existing files named recording_1.wav, recording_2.wav, etc. up
+// to recording_100.wav, and returns the first available filename.
+// If all 100 filenames are taken, returns recording_ERROR.wav and logs an error.
+// ---------------------------------------------------------------------------
+String getWavHeader() {
+    for (int i = 1; i <= 100; i++) {
+        String filename = String("/recording_") + String(i, DEC) + String("_04-05-26.wav");
+        if (!SD.exists(filename)) {
+            return filename;
+        }
+    }
+    Serial.println("ERROR: Recording limit (100) exceeded");
+    return "/recording_ERROR.wav";
+}
+
 void setup() {
 
     delayMicroseconds(2000000);  // 2s delay — give sender time to boot
+
+    digitalWrite(LED_BUILTIN, LOW);   // turn off LED
 
     Serial.begin(921600);
     Serial.println("Serial communication initialized");
@@ -97,8 +126,13 @@ void setup() {
     cfg.copyFrom(StreamInfo);
     cfg.i2s_format = I2S_STD_FORMAT;
     cfg.is_master  = true;
-    cfg.use_apll   = false;
-    cfg.pin_mck    = 3;
+    cfg.use_apll   = true;
+
+    // added after by nathan to address shortened wav file
+    cfg.buffer_size = 4096;  // nothing beyond this yielded any return
+    cfg.buffer_count = 4;    // same
+
+    // cfg.pin_mck    = 3; - not needed
     // pass cfg object to i2sStream begin() call
     i2sStream.begin(cfg);
 
@@ -112,31 +146,29 @@ void setup() {
 
     // ---- Wait for I2S sender ----
     // i gotta check this shit fr because even if nothing is connected it hallucinates a connection
-    // idfk
     while (true) {
         if (i2sStream.isActive() && i2sStream.available() > 100) {
-            Serial.println("I2S sender detected — YES, WE HAVE LIFTOFF!");
+            Serial.println("I2S sender detected");
 
             AudioInfo receivedInfo = i2sStream.audioInfo();
-            Serial.print("Received Audio Info - Sample Rate: "); Serial.print(receivedInfo.sample_rate);
-            Serial.print(", Channels: ");                        Serial.print(receivedInfo.channels);
-            Serial.print(", Bits per Sample: ");                 Serial.println(receivedInfo.bits_per_sample);
             break;
         }
-        Serial.println("Waiting for I2S sender... (pray harder)");
+        Serial.println("Waiting for I2S sender...");
         delayMicroseconds(500000);
     }
 
     // ---- SD card + WAV recording (15-second clip) ----
     bool sdReady = sd_card_init();
     if (sdReady) {
-        sdReady = wav_writer_begin(StreamInfo, "/recording.wav");
+        String wavPath = getWavHeader();
+        sdReady = wav_writer_begin(StreamInfo, wavPath.c_str());
     }
     if (sdReady) {
-        record_wav_clip(5000);  // 5 seconds
+        record_wav_clip(20000);  // 20 seconds - is actually 15 for some fkn reason
         recordingDone = true;
     } else {
         Serial.println("[MAIN] SD unavailable — skipping WAV recording.");
+        delayMicroseconds(2000000);  // 2s delay
     }
 
     // ---- After recording, set up CSV-only output for loop() ----
