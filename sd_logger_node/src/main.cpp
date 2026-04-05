@@ -19,7 +19,6 @@
 #include "wav_writer.h"
 
 // audio information config
-// WHY THE FUCK DOES THIS CHANGE WAV LNEGTH?
 // 16000 Hz, stereo, 32-bit — must match the sender node.
 AudioInfo StreamInfo(16000, 2, 32);
 
@@ -30,16 +29,42 @@ I2SStream i2sStream;
 // csv output object
 CsvOutput<int32_t> csvOutput(Serial);
 
-// output of stream copy function
-// this will fan out to both Serial CSV and WAV file
-MultiOutput multiOutput;
+// flag to track SD card initialization status
+bool sdReady = false;
 
-// this is the key component that handles stream routing.
-// NOTE: must be declared AFTER i2sStream and multiOutput
-StreamCopy copier(multiOutput, i2sStream);
+// active session directory name (set during startup)
+String sessionDir = "";
 
-// Track whether recording is finished
-bool recordingDone = false;
+// ---------------------------------------------------------------------------
+// Create a unique session directory on the SD card at boot.
+// Increments until it finds a free slot: AUDIO_LOGGER_SESSION_1, _2, etc.
+// Returns true on success.
+// ---------------------------------------------------------------------------
+bool createSessionDir() {
+    if (!sdReady) {
+        Serial.println("[SESSION] SD not ready — skipping session dir creation");
+        return false;
+    }
+
+    for (int i = 1; i <= 999; i++) {
+        String dirName = "/AUDIO_LOGGER_SESSION_" + String(i);
+        if (!SD.exists(dirName)) {
+            if (SD.mkdir(dirName)) {
+                sessionDir = dirName;
+                Serial.print("[SESSION] Created ");
+                Serial.println(sessionDir);
+                return true;
+            } else {
+                Serial.print("[SESSION] Failed to create ");
+                Serial.println(dirName);
+                return false;
+            }
+        }
+    }
+
+    Serial.println("[SESSION] Session limit (999) exceeded — no dir created");
+    return false;
+}
 
 // Debug helper — call AFTER cfg is created in setup()
 template <typename Cfg>
@@ -57,56 +82,76 @@ void printDebugInfo(const Cfg &cfg) {
 }
 
 // ---------------------------------------------------------------------------
-//  Record a fixed-length WAV clip to the SD card.
-//  Blocks for `durationMs` milliseconds, copying I2S data into the WAV file.
-//  After the duration elapses, the file is finalized and closed.
-// ---------------------------------------------------------------------------
-void record_wav_clip(unsigned long durationMs) {
-    // Build a temporary pipeline: I2S → WAV file only (no CSV spam)
-    MultiOutput wavOnly;
-    wavOnly.add(wav_writer_stream());
-    StreamCopy wavCopier(wavOnly, i2sStream);
-
-    Serial.printf("[REC] Recording %lu seconds to SD card...\n", durationMs / 1000);
-
-    unsigned long startTime = millis();
-
-    digitalWrite(LED_BUILTIN, HIGH);  // turn on LED to indicate recording status
-
-    while ((millis() - startTime) < durationMs) {
-
-        if (i2sStream.available() == 0) {
-            Serial.println("BUFFER UNDERRUN");    // added to diagnose shortened WAV file issue
-        }
-
-        wavCopier.copy();
-    }
-
-    digitalWrite(LED_BUILTIN, LOW);   // turn off LED to indicate recording is done
-
-    // Finalize — flushes buffer and writes correct WAV header size
-    wav_writer_end();
-
-    Serial.println("[REC] =============================");
-    Serial.println("[REC] file saved");
-    Serial.println("[REC] =============================");
-}
-
-// ---------------------------------------------------------------------------
 // Helper function to generate a unique WAV filename for each recording.
 // Checks for existing files named recording_1.wav, recording_2.wav, etc. up
 // to recording_100.wav, and returns the first available filename.
 // If all 100 filenames are taken, returns recording_ERROR.wav and logs an error.
 // ---------------------------------------------------------------------------
-String getWavHeader() {
+String getWavPath() {
+    String prefix = sessionDir.length() > 0 ? sessionDir : "/";
     for (int i = 1; i <= 100; i++) {
-        String filename = String("/recording_") + String(i, DEC) + String("_04-05-26.wav");
+        String filename = prefix + "/recording_" + String(i, DEC) + String("_04-05-26.wav");
         if (!SD.exists(filename)) {
             return filename;
         }
     }
     Serial.println("ERROR: Recording limit (100) exceeded");
-    return "/recording_ERROR.wav";
+    return prefix + "/recording_ERROR.wav";
+}
+
+// ---------------------------------------------------------------------------
+// Write I2S audio to SD card WAV file for specified duration
+// ---------------------------------------------------------------------------
+void write_sd(unsigned long durationMs) {
+
+    // check if SD card is ready before trying to write
+    if (!sdReady) {
+        Serial.println("SD card not ready - skipping SD write");
+        delayMicroseconds(200000);  // 2s to read serial
+        return;
+    }
+
+    // check SD card size before trying to write - zero means card is invalid/full
+    if (SD.cardSize() == 0) {
+        Serial.println("SD card error - skipping SD write");
+        delayMicroseconds(200000);  // 2s to read serial
+        return;
+    }
+
+    // grab file path and header data
+    String wavPath = getWavPath();
+    if (!wav_writer_begin(StreamInfo, wavPath.c_str())) {
+        Serial.println("Failed to open WAV file - skipping SD write");
+        delayMicroseconds(200000);
+        return;
+    }
+
+    StreamCopy wavCopier(wav_writer_stream(), i2sStream);
+    unsigned long startTime = millis();
+
+    digitalWrite(LED_BUILTIN, HIGH);
+
+    while ((millis() - startTime) < durationMs) {
+        wavCopier.copy();
+    }
+
+    digitalWrite(LED_BUILTIN, LOW);
+    wav_writer_end();
+}
+
+// ---------------------------------------------------------------------------
+// Write I2S audio to Serial as CSV for specified duration
+// ---------------------------------------------------------------------------
+void write_csv(unsigned long durationMs) {
+
+    // set up copier itself
+    StreamCopy csvCopier(csvOutput, i2sStream);
+
+    // copy for set amnt of time
+    unsigned long startTime = millis();
+    while ((millis() - startTime) < durationMs) {
+        csvCopier.copy();
+    }
 }
 
 void setup() {
@@ -157,25 +202,24 @@ void setup() {
         delayMicroseconds(500000);
     }
 
-    // ---- SD card + WAV recording (15-second clip) ----
-    bool sdReady = sd_card_init();
-    if (sdReady) {
-        String wavPath = getWavHeader();
-        sdReady = wav_writer_begin(StreamInfo, wavPath.c_str());
-    }
-    if (sdReady) {
-        record_wav_clip(20000);  // 20 seconds - is actually 15 for some fkn reason
-        recordingDone = true;
-    } else {
-        Serial.println("[MAIN] SD unavailable — skipping WAV recording.");
-        delayMicroseconds(2000000);  // 2s delay
-    }
+    // init SD card
+    sdReady = sd_card_init();
 
-    // ---- After recording, set up CSV-only output for loop() ----
-    multiOutput.add(csvOutput);
+    // create unique session directory
+    createSessionDir();
+
     Serial.println("[MAIN] Entering CSV streaming mode.");
 }
 
 void loop() {
-    copier.copy();
+    // sd cycle
+    Serial.println("Starting SD write cycle");
+    delay(1000);
+    digitalWrite(LED_BUILTIN, HIGH);
+    write_sd(20000);
+    // csv cycle
+    Serial.println("Starting CSV write cycle");
+    delay(1000);
+    digitalWrite(LED_BUILTIN, LOW);
+    write_csv(20000);
 }
