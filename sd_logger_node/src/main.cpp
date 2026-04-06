@@ -88,6 +88,7 @@ void printDebugInfo(const Cfg &cfg) {
 // If all 100 filenames are taken, returns recording_ERROR.wav and logs an error.
 // ---------------------------------------------------------------------------
 String getWavPath() {
+    // grab prefix for filename based on session directory; if sessionDir is empty, use root
     String prefix = sessionDir.length() > 0 ? sessionDir : "/";
     for (int i = 1; i <= 100; i++) {
         String filename = prefix + "/recording_" + String(i, DEC) + String("_04-05-26.wav");
@@ -202,8 +203,13 @@ void setup() {
         delayMicroseconds(500000);
     }
 
-    // init SD card
-    sdReady = sd_card_init();
+    // init SD card with retry logic
+    for (int i = 0; i < 3; i++) {
+        sdReady = sd_card_init();
+        if (sdReady) break;
+        Serial.printf("[SD] Retry %d/3...\n", i + 1);
+        delay(500);
+    }
 
     // create unique session directory
     createSessionDir();
